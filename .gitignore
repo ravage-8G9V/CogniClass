@@ -1,0 +1,29 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Student Datasets and Trained Models (Important: Privacy & Storage)
+dataset/
+models/encodings.pkl
+
+# Recorded Session Data (WAV audio, local DBs, and CSVs)
+sessions/
+*.wav
+*.csv
+
+# Temporary generated PDFs
+*.pdf
+
+# IDE/Editor specific settings
+.vscode/
+.idea/
+.venv/
+env/
+venv/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
