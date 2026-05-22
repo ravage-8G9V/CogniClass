@@ -751,7 +751,8 @@ gradio-app.dark textarea:focus, gradio-app.dark input:focus, gradio-app.dark sel
 .main-content { animation: fadeIn 0.45s ease-out forwards !important; }
 
 /* ── INSTANT UPPERCASE INPUT ── */
-.uppercase-input input {
+.uppercase-input input,
+.uppercase-input textarea {
     text-transform: uppercase !important;
 }
 """
