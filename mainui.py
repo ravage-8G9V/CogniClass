@@ -410,18 +410,48 @@ def validate_and_capture(usn, name, course, student_password):
     registry = attend.load_registry()
 
     if not usn or not name or not course or not student_password:
-        return None, "❌ Fill all fields", usn, name, course, student_password
+        yield None, "❌ Fill all fields", usn, name, course, student_password
+        return
 
     if usn in registry:
-        return None, f"❌ USN already exists: {usn}", usn, name, course, student_password
+        yield None, f"❌ USN already exists: {usn}", usn, name, course, student_password
+        return
 
-    frame, msg = attend.capture_face_stream(usn, name, course, student_password)
+    # Call the generator from attend.py
+    last_frame = None
+    msg = ""
+    for frame, status_msg in attend.capture_face_stream(usn, name, course, student_password):
+        last_frame = frame
+        msg = status_msg
+        # Yield the current progress frame and status, leaving inputs intact
+        yield frame, status_msg, usn, name, course, student_password
 
-    if frame is not None:
-        attend.encode_faces()
-        msg += "\n✅ Model trained successfully"
+    if last_frame is not None and "✅" in msg:
+        yield last_frame, "⏳ Training face recognition model... Please wait...", usn, name, course, student_password
+        try:
+            attend.encode_faces()
+            msg += "\n✅ Model trained successfully"
+        except Exception as e:
+            msg += f"\n⚠️ Model training error: {str(e)}"
+        
+        # Clear fields on success at the very end
+        yield last_frame, msg, "", "", "", ""
+    else:
+        # Keep fields on failure
+        yield last_frame, msg, usn, name, course, student_password
 
-    return frame, msg, "", "", "", ""
+
+def start_preview_ui():
+    for frame in attend.start_face_preview():
+        if frame is None:
+            yield None, "❌ Camera preview failed"
+            break
+        yield frame, "🎥 Preview active (Framing/Lighting check)"
+
+
+def stop_preview_ui():
+    attend.stop_face_preview()
+    return None, "⏹ Preview stopped"
 
 
 # =====================================================
@@ -719,6 +749,11 @@ gradio-app.dark textarea:focus, gradio-app.dark input:focus, gradio-app.dark sel
 }
 
 .main-content { animation: fadeIn 0.45s ease-out forwards !important; }
+
+/* ── INSTANT UPPERCASE INPUT ── */
+.uppercase-input input {
+    text-transform: uppercase !important;
+}
 """
 
 # =====================================================
@@ -822,7 +857,8 @@ with gr.Blocks(
                         with gr.Row():
                             with gr.Column():
                                 student_usn_login = gr.Textbox(
-                                    label="USN", placeholder="Enter your USN"
+                                    label="USN", placeholder="Enter your USN",
+                                    elem_classes=["uppercase-input"]
                                 )
                             with gr.Column():
                                 student_password_login = gr.Textbox(
@@ -1111,19 +1147,15 @@ with gr.Blocks(
                         # Form
                         with gr.Column(scale=1, elem_classes=["custom-card"]):
                             gr.Markdown("### 📝 Student Information")
-                            usn = gr.Textbox(label="USN", placeholder="e.g. 1AB23CS001")
-                            name = gr.Textbox(label="Name", placeholder="Full Name")
-                            course = gr.Textbox(label="Course", placeholder="Department / Course")
+                            usn = gr.Textbox(label="USN", placeholder="e.g. 1AB23CS001", elem_classes=["uppercase-input"])
+                            name = gr.Textbox(label="Name", placeholder="Full Name", elem_classes=["uppercase-input"])
+                            course = gr.Textbox(label="Course", placeholder="Department / Course", elem_classes=["uppercase-input"])
                             student_password = gr.Textbox(
                                 label="Password", type="password",
                                 placeholder="Create a secure password"
                             )
 
-                            usn.change(to_upper, usn, usn)
-                            name.change(to_upper, name, name)
-                            course.change(to_upper, course, course)
-
-                            start_capture_btn = gr.Button("📸 Start Capture", variant="primary")
+                            start_capture_btn = gr.Button("📸 Capture & Register", variant="primary")
                             register_status = gr.Textbox(
                                 label="Status", elem_classes=["status-box"]
                             )
@@ -1132,11 +1164,26 @@ with gr.Blocks(
                         with gr.Column(scale=1, elem_classes=["custom-card"]):
                             gr.Markdown("### 📸 Live Camera Capture")
                             camera_output = gr.Image(label="Camera Preview")
+                            with gr.Row():
+                                start_preview_btn = gr.Button("🎥 Start Preview", variant="secondary")
+                                stop_preview_btn = gr.Button("⏹ Stop Preview", variant="stop")
 
                     start_capture_btn.click(
                         validate_and_capture,
                         [usn, name, course, student_password],
                         [camera_output, register_status, usn, name, course, student_password]
+                    )
+
+                    start_preview_btn.click(
+                        start_preview_ui,
+                        [],
+                        [camera_output, register_status]
+                    )
+
+                    stop_preview_btn.click(
+                        stop_preview_ui,
+                        [],
+                        [camera_output, register_status]
                     )
 
                     # Manage Students
@@ -1147,7 +1194,8 @@ with gr.Blocks(
                                 delete_usn = gr.Textbox(
                                     label="USN to Delete",
                                     placeholder="Enter USN",
-                                    scale=3
+                                    scale=3,
+                                    elem_classes=["uppercase-input"]
                                 )
                                 delete_btn = gr.Button(
                                     "Delete", variant="stop", scale=0, min_width=100
@@ -1155,7 +1203,6 @@ with gr.Blocks(
                             delete_status = gr.Textbox(
                                 label="Delete Status", elem_classes=["status-box"]
                             )
-                            delete_usn.change(to_upper, delete_usn, delete_usn)
 
                             def delete_student_ui(usn):
                                 result = attend.delete_student(usn)

@@ -84,16 +84,55 @@ def register_student(usn, name, course, num_images=20):
 
     print(f"[INFO] {count} images saved at {student_path}")
 
+preview_running = False
+
+def start_face_preview():
+    global preview_running
+    import time
+    preview_running = True
+
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("❌ Camera not working for preview")
+        yield None
+        return
+
+    try:
+        while preview_running:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+
+            # Convert BGR to RGB for Gradio
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            yield rgb_frame
+            time.sleep(0.03)  # around 30 FPS
+    finally:
+        cap.release()
+
+def stop_face_preview():
+    global preview_running
+    preview_running = False
+
 def capture_face_stream(usn, name, course, password, num_images=20):
+    global preview_running
+    import time
+
+    # Stop preview first and wait for camera to be freed
+    preview_running = False
+    time.sleep(0.4)
 
     # 🔴 HARD VALIDATION FIRST (before anything)
     if not usn or not name or not course:
-        return None, "❌ All fields are required"
+        yield None, "❌ All fields are required"
+        return
 
     registry = load_registry()
 
     if usn in registry:
-        return None, f"❌ Duplicate USN detected: {usn}. Registration blocked."
+        yield None, f"❌ Duplicate USN detected: {usn}. Registration blocked."
+        return
 
     # ✅ Only after validation → proceed
     folder_name = f"{name}_{usn}"
@@ -101,29 +140,38 @@ def capture_face_stream(usn, name, course, password, num_images=20):
 
     # extra safety (edge case)
     if os.path.exists(student_path):
-        return None, "❌ Folder already exists. Possible duplicate."
+        yield None, "❌ Folder already exists. Possible duplicate."
+        return
 
     os.makedirs(student_path, exist_ok=False)
 
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
-        return None, "❌ Camera not working"
+        yield None, "❌ Camera not working"
+        return
 
     count = 0
     last_frame = None
 
-    while count < num_images:
-        ret, frame = cap.read()
-        if not ret:
-            continue
+    try:
+        while count < num_images:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
 
-        last_frame = frame
-        img_path = os.path.join(student_path, f"{count}.jpg")
-        cv2.imwrite(img_path, frame)
-        count += 1
+            last_frame = frame
+            img_path = os.path.join(student_path, f"{count}.jpg")
+            cv2.imwrite(img_path, frame)
+            count += 1
 
-    cap.release()
+            # Convert BGR to RGB for live stream in Gradio UI
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            yield rgb_frame, f"📸 Capturing face sample {count}/{num_images}..."
+            time.sleep(0.08)  # slight delay for facial variation
+    finally:
+        cap.release()
 
     # ✅ Save only after successful capture
     registry[usn] = {
@@ -134,7 +182,9 @@ def capture_face_stream(usn, name, course, password, num_images=20):
     }
     save_registry(registry)
 
-    return last_frame, f"✅ Registered {name} ({usn})"
+    # Convert last frame to RGB for final output
+    final_rgb = cv2.cvtColor(last_frame, cv2.COLOR_BGR2RGB) if last_frame is not None else None
+    yield final_rgb, f"✅ Registered {name} ({usn})"
 
 # ─────────────────────────────────────────
 # 2) ENCODE FACES
