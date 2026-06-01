@@ -6,6 +6,7 @@ import audio_module
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 import requests
+import analytics
 
 
 DEVICE_LIST = audio_module.get_input_devices()
@@ -141,6 +142,7 @@ def reset_all_panels(selected_section):
         gr.update(visible=(selected_section == "student")),
         gr.update(visible=(selected_section == "teacher")),
         gr.update(visible=(selected_section == "register")),
+        gr.update(visible=(selected_section == "insights")),
 
         gr.update(visible=False),  # home_banner
 
@@ -346,6 +348,211 @@ def generate_ai_pdf(ai_text):
         content.append(Spacer(1, 10))
     doc.build(content)
     return pdf_path
+
+
+def generate_lecture_ppt(selected_session):
+    folder = get_selected_folder(selected_session)
+    if not folder:
+        return "❌ No session selected", None
+
+    audio_path = os.path.join(folder, "audio", "lecture.wav")
+    if not os.path.exists(audio_path):
+        return "❌ Audio not found", None
+
+    # Step 1: Transcribe the audio first (or reuse if already transcribed)
+    with open(audio_path, "rb") as audio_file:
+        response = requests.post(
+            f"{LAPTOP_SERVER_URL}/transcribe",
+            files={"file": audio_file},
+            timeout=600
+        )
+
+    if response.status_code != 200 or not response.text.strip():
+        return f"❌ Transcription error: {response.status_code}", None
+
+    text = response.json()["transcription"]
+
+    # Step 2: Request PPT generation from the laptop server
+    ppt_response = requests.post(
+        f"{LAPTOP_SERVER_URL}/generate_ppt",
+        json={"text": text},
+        stream=True,
+        timeout=600
+    )
+
+    if ppt_response.status_code != 200:
+        return f"❌ PPT generation failed: {ppt_response.status_code}", None
+
+    # Step 3: Save the received binary stream locally
+    output_filename = "Lecture_Presentation.pptx"
+    output_path = os.path.join(folder, output_filename)
+    
+    with open(output_path, "wb") as f:
+        for chunk in ppt_response.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    return f"✅ PowerPoint presentation generated and saved to session folder!\n📁 File: {output_filename}", output_path
+
+
+def load_quiz_ui(selected_session):
+    folder = get_selected_folder(selected_session)
+    if not folder:
+        return (
+            "❌ No session selected", [],
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False)
+        )
+
+    audio_path = os.path.join(folder, "audio", "lecture.wav")
+    if not os.path.exists(audio_path):
+        return (
+            "❌ Audio not found", [],
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False)
+        )
+
+    # Get transcription
+    with open(audio_path, "rb") as audio_file:
+        response = requests.post(
+            f"{LAPTOP_SERVER_URL}/transcribe",
+            files={"file": audio_file},
+            timeout=600
+        )
+
+    if response.status_code != 200 or not response.text.strip():
+        return (
+            f"❌ Transcription error: {response.status_code}", [],
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False)
+        )
+
+    text = response.json()["transcription"]
+
+    # Query Quiz
+    quiz_response = requests.post(
+        f"{LAPTOP_SERVER_URL}/generate_quiz",
+        json={"text": text},
+        timeout=600
+    )
+
+    if quiz_response.status_code != 200:
+        return (
+            f"❌ Quiz generation failed: {quiz_response.status_code}", [],
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False)
+        )
+
+    data = quiz_response.json()
+    questions = data.get("questions", [])
+    
+    if len(questions) < 5:
+        return (
+            "❌ Error: Received less than 5 questions from server.", [],
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False)
+        )
+
+    # Store state: questions list with correct indexes
+    quiz_state = []
+    updates = []
+
+    for i in range(5):
+        q = questions[i]
+        question_text = f"Q{i+1}: {q['question']}"
+        options = q["options"]
+        correct_idx = q["correct_index"]
+        
+        quiz_state.append({
+            "question": q["question"],
+            "options": options,
+            "correct_index": correct_idx
+        })
+
+        updates.append(gr.update(
+            label=question_text,
+            choices=options,
+            value=None,
+            visible=True
+        ))
+
+    return (
+        "📝 Quiz ready! Answer the 5 questions below and submit.",
+        quiz_state,
+        updates[0],
+        updates[1],
+        updates[2],
+        updates[3],
+        updates[4],
+        gr.update(visible=True),  # show submit button
+        gr.update(visible=False)  # hide old results box
+    )
+
+
+def submit_quiz_ui(q1, q2, q3, q4, q5, quiz_state):
+    if not quiz_state or len(quiz_state) != 5:
+        return "❌ Quiz state is invalid. Please generate the quiz again.", gr.update(visible=False)
+
+    user_answers = [q1, q2, q3, q4, q5]
+    score = 0
+    
+    html_card_details = ""
+
+    for i in range(5):
+        q = quiz_state[i]
+        user_ans = user_answers[i]
+        correct_idx = q["correct_index"]
+        correct_ans = q["options"][correct_idx]
+        
+        is_correct = (user_ans == correct_ans)
+        if is_correct:
+            score += 1
+            status_badge = '<span style="color:#2e7d32; font-weight:700;">✔ Correct</span>'
+            border_style = 'border-left: 5px solid #2e7d32; background: rgba(46, 125, 50, 0.03);'
+        else:
+            status_badge = '<span style="color:#c62828; font-weight:700;">✘ Incorrect</span>'
+            border_style = 'border-left: 5px solid #c62828; background: rgba(198, 40, 40, 0.03);'
+
+        user_ans_label = user_ans if user_ans else '<span style="color:#666; font-style:italic;">No answer selected</span>'
+
+        html_card_details += f"""
+        <div style="margin-bottom: 20px; padding: 18px; border-radius: 12px; {border_style} box-shadow: 0 2px 8px rgba(0,0,0,0.02);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+                <h4 style="margin:0; font-size:1.05rem; font-weight:700; color:#5a1f22;">Question {i+1}</h4>
+                {status_badge}
+            </div>
+            <p style="margin: 0 0 12px 0; font-size:0.95rem; font-weight:600; color:#331515;">{q['question']}</p>
+            <div style="font-size:0.9rem; line-height:1.6;">
+                <div><b>Your Answer:</b> {user_ans_label}</div>
+                <div><b>Correct Answer:</b> <span style="color:#2e7d32; font-weight:600;">{correct_ans}</span></div>
+            </div>
+        </div>
+        """
+
+    score_color = '#2e7d32' if score >= 4 else ('#d8b958' if score >= 3 else '#c62828')
+    scorecard_html = f"""
+    <div style="font-family:'Outfit', 'Inter', sans-serif; padding: 10px 0;">
+        <div style="text-align: center; margin-bottom: 30px; padding: 25px; background: rgba(229,195,101,0.08); border: 1.5px solid rgba(229,195,101,0.3); border-radius: 18px;">
+            <h3 style="margin:0; font-size:1.4rem; font-weight:800; color:#5a1f22;">📊 Quiz Assessment Completed</h3>
+            <div style="font-size: 3.5rem; font-weight: 800; color: {score_color}; margin: 15px 0;">
+                {score} / 5
+            </div>
+            <p style="margin:0; font-size:1.05rem; font-weight:600; color:#331515;">
+                {"🏆 Outstanding performance!" if score == 5 else ("👍 Well done! Keep it up." if score >= 3 else "📚 Time to review the lecture notes again.")}
+            </p>
+        </div>
+        
+        <div>
+            {html_card_details}
+        </div>
+    </div>
+    """
+
+    return scorecard_html, gr.update(visible=True)
 
 
 # =====================================================
@@ -781,6 +988,7 @@ with gr.Blocks(
             student_btn  = gr.Button("👨‍🎓  Student Portal",    elem_classes=["nav-btn"])
             teacher_btn  = gr.Button("👩‍🏫  Teacher Portal",    elem_classes=["nav-btn"])
             register_btn = gr.Button("🧾  Face Registration", elem_classes=["nav-btn"])
+            insights_btn = gr.Button("📈  Executive Insights", elem_classes=["nav-btn"])
             gr.Markdown(
                 "<div class='sidebar-footer'>Smart Classroom v2.0<br>Minimal Edition</div>"
             )
@@ -963,6 +1171,66 @@ with gr.Blocks(
                                         )
                                     ai_pdf_output = gr.File(label="AI PDF Download")
 
+                        # PPTX TAB
+                        with gr.Tab("📊 Lecture PPTX"):
+                            with gr.Column(elem_classes=["custom-card"]):
+                                gr.Markdown("### 📊 AI PowerPoint Generator")
+                                with gr.Row(equal_height=True):
+                                    ppt_session_list = gr.Dropdown(
+                                        label="Select Session", scale=3
+                                    )
+                                    refresh_ppt_sessions_btn = gr.Button(
+                                        "↻ Load Sessions",
+                                        variant="secondary",
+                                        scale=1,
+                                        min_width=140
+                                    )
+                                
+                                generate_ppt_btn = gr.Button(
+                                    "📊 Generate PowerPoint Presentation", variant="primary"
+                                )
+                                ppt_status = gr.Textbox(
+                                    label="Generation Status",
+                                    elem_classes=["status-box"]
+                                )
+                                ppt_file_output = gr.File(label="PowerPoint Download")
+
+                        # QUIZ TAB
+                        with gr.Tab("📝 Lecture Quiz"):
+                            quiz_state = gr.State([])
+                            with gr.Column(elem_classes=["custom-card"]):
+                                gr.Markdown("### 📝 Lecture Assessment Quiz")
+                                with gr.Row(equal_height=True):
+                                    quiz_session_list = gr.Dropdown(
+                                        label="Select Session", scale=3
+                                    )
+                                    refresh_quiz_sessions_btn = gr.Button(
+                                        "↻ Load Sessions",
+                                        variant="secondary",
+                                        scale=1,
+                                        min_width=140
+                                    )
+
+                                generate_quiz_btn = gr.Button(
+                                    "📝 Generate Assessment Quiz", variant="primary"
+                                )
+                                quiz_status = gr.Textbox(
+                                    label="Quiz Status",
+                                    elem_classes=["status-box"]
+                                )
+
+                            with gr.Column(elem_classes=["custom-card"]):
+                                q1 = gr.Radio(choices=[], label="Question 1", visible=False)
+                                q2 = gr.Radio(choices=[], label="Question 2", visible=False)
+                                q3 = gr.Radio(choices=[], label="Question 3", visible=False)
+                                q4 = gr.Radio(choices=[], label="Question 4", visible=False)
+                                q5 = gr.Radio(choices=[], label="Question 5", visible=False)
+                                
+                                submit_quiz_btn = gr.Button("📝 Submit Answers", variant="primary", visible=False)
+                                
+                            # Scorecard display
+                            quiz_scorecard = gr.HTML(visible=False)
+
                     # ── Button bindings ──
                     refresh_sessions_btn.click(get_sessions_dropdown, [], session_list)
                     generate_notes_btn.click(generate_notes, [session_list], notes_output)
@@ -971,6 +1239,25 @@ with gr.Blocks(
                         generate_ai_content, [session_list, ai_mode, custom_prompt], ai_output
                     )
                     download_ai_pdf_btn.click(generate_ai_pdf, [ai_output], ai_pdf_output)
+
+                    refresh_ppt_sessions_btn.click(get_sessions_dropdown, [], ppt_session_list)
+                    generate_ppt_btn.click(
+                        generate_lecture_ppt,
+                        [ppt_session_list],
+                        [ppt_status, ppt_file_output]
+                    )
+
+                    refresh_quiz_sessions_btn.click(get_sessions_dropdown, [], quiz_session_list)
+                    generate_quiz_btn.click(
+                        load_quiz_ui,
+                        [quiz_session_list],
+                        [quiz_status, quiz_state, q1, q2, q3, q4, q5, submit_quiz_btn, quiz_scorecard]
+                    )
+                    submit_quiz_btn.click(
+                        submit_quiz_ui,
+                        [q1, q2, q3, q4, q5, quiz_state],
+                        [quiz_scorecard, quiz_scorecard]
+                    )
 
                     student_login_btn.click(
                         student_login,
@@ -1227,10 +1514,38 @@ with gr.Blocks(
                 )
 
             # ══════════════════════════════════════════
+            # EXECUTIVE INSIGHTS PANEL
+            # ══════════════════════════════════════════
+            with gr.Group(visible=False) as insights_panel:
+                with gr.Group(elem_classes=["dashboard-header"]):
+                    gr.HTML("""
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:15px;">
+                        <div>
+                            <h1 style="margin:0; font-size:32px; font-weight:800;">📈 Executive Insights & Analytics</h1>
+                            <p style="margin-top:6px; font-size:15px; opacity:0.8;">Interactive visualizations of classroom attendance and student metrics.</p>
+                        </div>
+                    </div>
+                    """)
+
+                with gr.Column(elem_classes=["custom-card"]):
+                    with gr.Row(equal_height=True):
+                        gr.Markdown("### 📊 Live Analytics Control")
+                        refresh_analytics_btn = gr.Button("🔄 Refresh Analytics", variant="primary", scale=0, min_width=180)
+                    
+                    # Embed our Chart.js dashboard HTML component
+                    insights_html = gr.HTML(label="Visual Dashboard")
+
+                refresh_analytics_btn.click(
+                    analytics.generate_insights_html,
+                    [],
+                    insights_html
+                )
+
+            # ══════════════════════════════════════════
             # SIDEBAR BINDINGS
             # ══════════════════════════════════════════
             _nav_outputs = [
-                student_panel, teacher_panel, register_panel,
+                student_panel, teacher_panel, register_panel, insights_panel,
                 home_banner,
                 student_dashboard, session_panel, register_dashboard,
                 student_usn_login, student_password_login,
@@ -1241,6 +1556,14 @@ with gr.Blocks(
             student_btn.click(reset_all_panels,  [gr.State("student")],  _nav_outputs)
             teacher_btn.click(reset_all_panels,  [gr.State("teacher")],  _nav_outputs)
             register_btn.click(reset_all_panels, [gr.State("register")], _nav_outputs)
+            insights_btn.click(reset_all_panels, [gr.State("insights")], _nav_outputs)
+            
+            # Auto-update insights when clicking the insights tab
+            insights_btn.click(
+                analytics.generate_insights_html,
+                [],
+                insights_html
+            )
 
 
 # ── RUN ──
