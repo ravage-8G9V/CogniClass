@@ -400,111 +400,145 @@ def generate_insights_html():
         </div>
         
         <script>
-            // Detect Gradio dark theme dynamically to synchronize styles
-            function updateTheme() {{
-                const isDark = document.documentElement.classList.contains('dark') || 
-                               document.body.classList.contains('dark') ||
-                               window.matchMedia('(prefers-color-scheme: dark)').matches;
-                
-                const container = document.getElementById('themeContainer');
-                if (isDark) {{
-                    container.classList.add('dark-mode-override');
-                }} else {{
-                    container.classList.remove('dark-mode-override');
-                }}
-                return isDark;
-            }}
-            
-            const isDark = updateTheme();
-            const primaryColor = '#5a1f22';
-            const secondaryColor = '#e5c365';
-            const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
-            const labelColor = isDark ? '#fce594' : '#331515';
-            
-            // ── SUBJECT CHART ──
-            const subCtx = document.getElementById('subjectChart').getContext('2d');
-            new Chart(subCtx, {{
-                type: 'bar',
-                data: {{
-                    labels: {json.dumps(subjects)},
-                    datasets: [{{
-                        label: 'Attendance %',
-                        data: {json.dumps(rates)},
-                        backgroundColor: [
-                            'rgba(90, 31, 34, 0.85)',
-                            'rgba(229, 195, 101, 0.85)',
-                            'rgba(198, 40, 40, 0.85)',
-                            'rgba(46, 125, 50, 0.85)',
-                            'rgba(120, 144, 156, 0.85)'
-                        ],
-                        borderColor: isDark ? '#e5c365' : '#5a1f22',
-                        borderWidth: 1.5,
-                        borderRadius: 6
-                    }}]
-                }},
-                options: {{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {{
-                        legend: {{ display: false }}
-                    }},
-                    scales: {{
-                        y: {{
-                            beginAtZero: true,
-                            max: 100,
-                            grid: {{ color: gridColor }},
-                            ticks: {{ color: labelColor }}
-                        }},
-                        x: {{
-                            grid: {{ display: false }},
-                            ticks: {{ color: labelColor }}
+            (function() {{
+                let attempts = 0;
+                const maxAttempts = 100; // Try for 10 seconds
+
+                function initCharts() {{
+                    const subjectCanvas = document.getElementById('subjectChart');
+                    const trendCanvas = document.getElementById('trendChart');
+
+                    // If elements or library are not ready yet, retry in 100ms
+                    if (typeof Chart === 'undefined' || !subjectCanvas || !trendCanvas) {{
+                        attempts++;
+                        if (attempts < maxAttempts) {{
+                            setTimeout(initCharts, 100);
+                        }} else {{
+                            console.error("Chart.js failed to load or canvas elements not found.");
+                            if (subjectCanvas) {{
+                                subjectCanvas.parentElement.innerHTML = "<p style='color:#c62828; padding:20px; font-weight:600;'>⚠️ Unable to load charts. Please check your internet connection to load Chart.js from CDN.</p>";
+                            }}
                         }}
+                        return;
+                    }}
+
+                    // Setup theme detection
+                    function updateTheme() {{
+                        const isDark = document.documentElement.classList.contains('dark') || 
+                                       document.body.classList.contains('dark') ||
+                                       window.matchMedia('(prefers-color-scheme: dark)').matches;
+                        
+                        const container = document.getElementById('themeContainer');
+                        if (container) {{
+                            if (isDark) {{
+                                container.classList.add('dark-mode-override');
+                            }} else {{
+                                container.classList.remove('dark-mode-override');
+                            }}
+                        }}
+                        return isDark;
+                    }}
+                    
+                    const isDark = updateTheme();
+                    const primaryColor = '#5a1f22';
+                    const secondaryColor = '#e5c365';
+                    const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
+                    const labelColor = isDark ? '#fce594' : '#331515';
+
+                    try {{
+                        // ── SUBJECT CHART ──
+                        const subCtx = subjectCanvas.getContext('2d');
+                        new Chart(subCtx, {{
+                            type: 'bar',
+                            data: {{
+                                labels: {json.dumps(subjects)},
+                                datasets: [{{
+                                    label: 'Attendance %',
+                                    data: {json.dumps(rates)},
+                                    backgroundColor: [
+                                        'rgba(90, 31, 34, 0.85)',
+                                        'rgba(229, 195, 101, 0.85)',
+                                        'rgba(198, 40, 40, 0.85)',
+                                        'rgba(46, 125, 50, 0.85)',
+                                        'rgba(120, 144, 156, 0.85)'
+                                    ],
+                                    borderColor: isDark ? '#e5c365' : '#5a1f22',
+                                    borderWidth: 1.5,
+                                    borderRadius: 6
+                                }}]
+                            }},
+                            options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{
+                                    legend: {{ display: false }}
+                                }},
+                                scales: {{
+                                    y: {{
+                                        beginAtZero: true,
+                                        max: 100,
+                                        grid: {{ color: gridColor }},
+                                        ticks: {{ color: labelColor }}
+                                    }},
+                                    x: {{
+                                        grid: {{ display: false }},
+                                        ticks: {{ color: labelColor }}
+                                    }}
+                                }}
+                            }}
+                        }});
+                        
+                        // ── TREND CHART ──
+                        const trendCtx = trendCanvas.getContext('2d');
+                        new Chart(trendCtx, {{
+                            type: 'line',
+                            data: {{
+                                labels: {json.dumps(timeline_dates)},
+                                datasets: [{{
+                                    label: 'Attendance Rate %',
+                                    data: {json.dumps(timeline_rates)},
+                                    borderColor: '#e5c365',
+                                    backgroundColor: 'rgba(229, 195, 101, 0.15)',
+                                    borderWidth: 3,
+                                    pointBackgroundColor: '#5a1f22',
+                                    pointBorderColor: '#e5c365',
+                                    pointHoverRadius: 7,
+                                    tension: 0.35,
+                                    fill: true
+                                }}]
+                            }},
+                            options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{
+                                    legend: {{ display: false }}
+                                }},
+                                scales: {{
+                                    y: {{
+                                        beginAtZero: true,
+                                        max: 100,
+                                        grid: {{ color: gridColor }},
+                                        ticks: {{ color: labelColor }}
+                                    }},
+                                    x: {{
+                                        grid: {{ display: false }},
+                                        ticks: {{ color: labelColor }}
+                                    }}
+                                }}
+                            }}
+                        }});
+
+                        // Re-check theme on document adjustments
+                        setInterval(updateTheme, 1500);
+
+                    }} catch (e) {{
+                        console.error("Error drawing charts: ", e);
                     }}
                 }}
-            }});
-            
-            // ── TREND CHART ──
-            const trendCtx = document.getElementById('trendChart').getContext('2d');
-            new Chart(trendCtx, {{
-                type: 'line',
-                data: {{
-                    labels: {json.dumps(timeline_dates)},
-                    datasets: [{{
-                        label: 'Attendance Rate %',
-                        data: {json.dumps(timeline_rates)},
-                        borderColor: '#e5c365',
-                        backgroundColor: 'rgba(229, 195, 101, 0.15)',
-                        borderWidth: 3,
-                        pointBackgroundColor: '#5a1f22',
-                        pointBorderColor: '#e5c365',
-                        pointHoverRadius: 7,
-                        tension: 0.35,
-                        fill: true
-                    }}]
-                }},
-                options: {{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {{
-                        legend: {{ display: false }}
-                    }},
-                    scales: {{
-                        y: {{
-                            beginAtZero: true,
-                            max: 100,
-                            grid: {{ color: gridColor }},
-                            ticks: {{ color: labelColor }}
-                        }},
-                        x: {{
-                            grid: {{ display: false }},
-                            ticks: {{ color: labelColor }}
-                        }}
-                    }}
-                }}
-            }});
-            
-            // Re-check theme on document adjustments
-            setInterval(updateTheme, 1500);
+
+                // Start searching for DOM elements and library
+                initCharts();
+            }})();
         </script>
     </body>
     </html>

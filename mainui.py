@@ -262,26 +262,69 @@ def stop_attendance_ui():
 # NOTES & AI FUNCTIONS
 # =====================================================
 
+def get_session_transcription(folder):
+    if not folder:
+        return None, "❌ Invalid session folder"
+        
+    audio_path = os.path.join(folder, "audio", "lecture.wav")
+    transcription_path = os.path.join(folder, "audio", "transcription.txt")
+    
+    # 1. Check if cached transcription already exists
+    if os.path.exists(transcription_path):
+        try:
+            print(f"[INFO] Using cached transcription from {transcription_path}")
+            with open(transcription_path, "r", encoding="utf-8") as f:
+                cached_text = f.read().strip()
+                if cached_text:
+                    return cached_text, None
+        except Exception as e:
+            print(f"[WARNING] Failed to read cached transcription: {e}")
+            
+    # 2. If not cached, make sure audio exists
+    if not os.path.exists(audio_path):
+        return None, "❌ Audio file not found"
+        
+    # 3. Transcribe audio
+    print(f"[INFO] Transcription cache miss. Requesting transcription from server...")
+    try:
+        with open(audio_path, "rb") as audio_file:
+            response = requests.post(
+                f"{LAPTOP_SERVER_URL}/transcribe",
+                files={"file": audio_file},
+                timeout=600
+            )
+            
+        if response.status_code != 200 or not response.text.strip():
+            return None, f"❌ Server transcription error: {response.status_code}"
+            
+        text = response.json().get("transcription", "").strip()
+        if not text:
+            return None, "❌ Empty transcription returned from server"
+            
+        # 4. Cache the result to disk
+        try:
+            with open(transcription_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            print(f"[SUCCESS] Transcription successfully cached at {transcription_path}")
+        except Exception as e:
+            print(f"[WARNING] Failed to write transcription cache: {e}")
+            
+        return text, None
+        
+    except Exception as e:
+        return None, f"❌ Request to server failed: {str(e)}"
+
+
 def generate_notes(selected_session):
     folder = get_selected_folder(selected_session)
     if not folder:
         return "❌ No session selected"
 
-    audio_path = os.path.join(folder, "audio", "lecture.wav")
-    if not os.path.exists(audio_path):
-        return "❌ Audio file not found"
+    text, err = get_session_transcription(folder)
+    if err:
+        return err
 
-    with open(audio_path, "rb") as audio_file:
-        response = requests.post(
-            f"{LAPTOP_SERVER_URL}/transcribe",
-            files={"file": audio_file},
-            timeout=600
-        )
-
-    if response.status_code != 200 or not response.text.strip():
-        return f"❌ Server error: {response.status_code}"
-
-    return response.json()["transcription"]
+    return text
 
 
 def generate_ai_content(selected_session, mode, custom_prompt):
@@ -289,21 +332,9 @@ def generate_ai_content(selected_session, mode, custom_prompt):
     if not folder:
         return "❌ No session selected"
 
-    audio_path = os.path.join(folder, "audio", "lecture.wav")
-    if not os.path.exists(audio_path):
-        return "❌ Audio not found"
-
-    with open(audio_path, "rb") as audio_file:
-        response = requests.post(
-            f"{LAPTOP_SERVER_URL}/transcribe",
-            files={"file": audio_file},
-            timeout=600
-        )
-
-    if response.status_code != 200 or not response.text.strip():
-        return f"❌ Transcription error: {response.status_code}"
-
-    text = response.json()["transcription"]
+    text, err = get_session_transcription(folder)
+    if err:
+        return err
 
     # Send request to laptop server to generate AI notes
     ai_response = requests.post(
@@ -355,22 +386,9 @@ def generate_lecture_ppt(selected_session):
     if not folder:
         return "❌ No session selected", None
 
-    audio_path = os.path.join(folder, "audio", "lecture.wav")
-    if not os.path.exists(audio_path):
-        return "❌ Audio not found", None
-
-    # Step 1: Transcribe the audio first (or reuse if already transcribed)
-    with open(audio_path, "rb") as audio_file:
-        response = requests.post(
-            f"{LAPTOP_SERVER_URL}/transcribe",
-            files={"file": audio_file},
-            timeout=600
-        )
-
-    if response.status_code != 200 or not response.text.strip():
-        return f"❌ Transcription error: {response.status_code}", None
-
-    text = response.json()["transcription"]
+    text, err = get_session_transcription(folder)
+    if err:
+        return err, None
 
     # Step 2: Request PPT generation from the laptop server
     ppt_response = requests.post(
@@ -404,32 +422,14 @@ def load_quiz_ui(selected_session):
             gr.update(visible=False)
         )
 
-    audio_path = os.path.join(folder, "audio", "lecture.wav")
-    if not os.path.exists(audio_path):
+    text, err = get_session_transcription(folder)
+    if err:
         return (
-            "❌ Audio not found", [],
+            err, [],
             gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False)
         )
-
-    # Get transcription
-    with open(audio_path, "rb") as audio_file:
-        response = requests.post(
-            f"{LAPTOP_SERVER_URL}/transcribe",
-            files={"file": audio_file},
-            timeout=600
-        )
-
-    if response.status_code != 200 or not response.text.strip():
-        return (
-            f"❌ Transcription error: {response.status_code}", [],
-            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
-            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
-            gr.update(visible=False)
-        )
-
-    text = response.json()["transcription"]
 
     # Query Quiz
     quiz_response = requests.post(
