@@ -8,6 +8,25 @@ REGISTRY_PATH = os.path.join(DATASET_PATH, "registry.json")
 SESSION_ROOT = os.path.join(BASE_DIR, "sessions")
 SESSION_DB = os.path.join(SESSION_ROOT, "sessions.json")
 
+def resolve_folder_path(folder):
+    if not folder:
+        return ""
+    # Normalize slashes to current OS platform
+    folder_norm = os.path.normpath(folder.replace("\\", "/"))
+    if os.path.exists(folder_norm):
+        return folder_norm
+        
+    # Try resolving relative path if it contains 'sessions'
+    normalized_path_str = folder.replace("\\", "/")
+    if "sessions/" in normalized_path_str:
+        parts = normalized_path_str.split("sessions/", 1)
+        rel_part = os.path.join("sessions", parts[1].replace("/", os.sep))
+        abs_resolved = os.path.normpath(os.path.join(BASE_DIR, rel_part))
+        if os.path.exists(abs_resolved):
+            return abs_resolved
+            
+    return folder_norm
+
 def load_registry():
     if not os.path.exists(REGISTRY_PATH):
         return {}
@@ -48,10 +67,11 @@ def get_analytics_data():
         folder = s.get("folder")
         time_str = s.get("time", "")  # format: YYYY-MM-DD HH:MM
         
-        if not folder or not os.path.exists(folder):
+        resolved_folder = resolve_folder_path(folder)
+        if not resolved_folder or not os.path.exists(resolved_folder):
             continue
 
-        csv_path = os.path.join(folder, "attendance.csv")
+        csv_path = os.path.normpath(os.path.join(resolved_folder, "attendance.csv"))
         if not os.path.exists(csv_path):
             continue
 

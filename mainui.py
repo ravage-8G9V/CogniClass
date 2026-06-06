@@ -68,6 +68,25 @@ capture_status_text = "Inactive"
 # =====================================================
 # HELPERS
 # =====================================================
+def resolve_folder_path(folder):
+    if not folder:
+        return ""
+    # Normalize slashes to current OS platform
+    folder_norm = os.path.normpath(folder.replace("\\", "/"))
+    if os.path.exists(folder_norm):
+        return folder_norm
+        
+    # Try resolving relative path if it contains 'sessions'
+    normalized_path_str = folder.replace("\\", "/")
+    if "sessions/" in normalized_path_str:
+        parts = normalized_path_str.split("sessions/", 1)
+        rel_part = os.path.join("sessions", parts[1].replace("/", os.sep))
+        abs_resolved = os.path.normpath(os.path.join(BASE_DIR, rel_part))
+        if os.path.exists(abs_resolved):
+            return abs_resolved
+            
+    return folder_norm
+
 def load_sessions():
     if not os.path.exists(SESSION_DB):
         return []
@@ -75,12 +94,23 @@ def load_sessions():
         with open(SESSION_DB, "r") as f:
             data = json.load(f)
         valid_sessions = []
+        updated = False
         for s in data:
             folder = s.get("folder")
-            if folder and os.path.exists(folder):
-                valid_sessions.append(s)
-        with open(SESSION_DB, "w") as f:
-            json.dump(valid_sessions, f, indent=4)
+            if folder:
+                resolved = resolve_folder_path(folder)
+                if os.path.exists(resolved):
+                    if resolved != folder:
+                        s["folder"] = resolved
+                        updated = True
+                    valid_sessions.append(s)
+                else:
+                    # Keep legacy/unreachable entries instead of silently deleting them
+                    # to prevent database deletion when copying between environments
+                    valid_sessions.append(s)
+        if updated:
+            with open(SESSION_DB, "w") as f:
+                json.dump(data, f, indent=4)
         return valid_sessions
     except Exception as e:
         print("SESSION LOAD ERROR:", e)
@@ -198,7 +228,7 @@ def capture_worker(usn, name, course, password):
     
     try:
         # Pass cap=None to let attend.py open the device itself
-        for frame, status_msg in attend.capture_face_stream(usn, name, course, password, cap=None):
+        for frame, status_msg in attend.capture_face_stream(usn, name, course, password):
             if not capture_active:
                 break
                 
@@ -234,23 +264,27 @@ def get_session_transcription(folder):
     if not folder:
         return None, "❌ Invalid session folder"
         
-    audio_path = os.path.join(folder, "audio", "lecture.wav")
-    transcription_path = os.path.join(folder, "audio", "transcription.txt")
+    resolved_folder = resolve_folder_path(folder)
+    audio_path = os.path.normpath(os.path.join(resolved_folder, "audio", "lecture.wav"))
+    transcription_path = os.path.normpath(os.path.join(resolved_folder, "audio", "transcription.txt"))
     
+    print(f"[INFO] Checking transcription cache path: {transcription_path}")
     if os.path.exists(transcription_path):
         try:
-            print(f"[INFO] Using cached transcription from {transcription_path}")
             with open(transcription_path, "r", encoding="utf-8") as f:
                 cached_text = f.read().strip()
                 if cached_text:
+                    print(f"[INFO] Cache HIT! Using cached transcription from: {transcription_path}")
                     return cached_text, None
+                else:
+                    print(f"[WARNING] Cache file was empty. Treating as cache miss.")
         except Exception as e:
             print(f"[WARNING] Failed to read cached transcription: {e}")
             
     if not os.path.exists(audio_path):
-        return None, "❌ Audio file not found"
+        return None, f"❌ Audio file not found at {audio_path}"
         
-    print(f"[INFO] Transcription cache miss. Querying server...")
+    print(f"[INFO] Cache MISS! Sending file to server for transcription: {audio_path}")
     try:
         with open(audio_path, "rb") as audio_file:
             response = requests.post(
@@ -269,7 +303,7 @@ def get_session_transcription(folder):
         try:
             with open(transcription_path, "w", encoding="utf-8") as f:
                 f.write(text)
-            print(f"[SUCCESS] Transcription cached at {transcription_path}")
+            print(f"[SUCCESS] Transcription successfully cached at: {transcription_path}")
         except Exception as e:
             print(f"[WARNING] Failed to cache transcription: {e}")
             

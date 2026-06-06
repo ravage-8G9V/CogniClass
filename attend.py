@@ -115,7 +115,7 @@ def stop_face_preview():
     global preview_running
     preview_running = False
 
-def capture_face_stream(usn, name, course, password, num_images=20):
+def capture_face_stream(usn, name, course, password, num_images=20, cap=None):
     global preview_running
     import time
 
@@ -244,10 +244,12 @@ def run_attendance(session_folder):
     total_students = len(registry)
 
     if total_students == 0:
-        return "❌ No registered students found"
+        yield None, "❌ No registered students found"
+        return
 
     if not os.path.exists(MODEL_PATH):
-        return "❌ Train model first"
+        yield None, "❌ Train model first"
+        return
 
     with open(MODEL_PATH, "rb") as f:
         data = pickle.load(f)
@@ -264,150 +266,152 @@ def run_attendance(session_folder):
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
-        return "❌ Camera not working"
+        yield None, "❌ Camera not working"
+        return
 
+    try:
+        while True:
 
-    while True:
+            if not attendance_running:
+                break
 
-        if not attendance_running:
-            break
+            ret, frame = cap.read()
 
-        ret, frame = cap.read()
+            if not ret:
+                continue
 
-        if not ret:
-            continue
-
-        small = cv2.resize(
-            frame,
-            (0, 0),
-            fx=0.25,
-            fy=0.25
-        )
-
-        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-
-        locations = face_recognition.face_locations(rgb)
-
-        encodings = face_recognition.face_encodings(
-            rgb,
-            locations
-        )
-
-        for encoding, location in zip(encodings, locations):
-
-            distances = face_recognition.face_distance(
-                data["encodings"],
-                encoding
+            small = cv2.resize(
+                frame,
+                (0, 0),
+                fx=0.25,
+                fy=0.25
             )
 
-            if len(distances) > 0:
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
 
-                idx = np.argmin(distances)
+            locations = face_recognition.face_locations(rgb)
 
-                if distances[idx] < 0.5:
+            encodings = face_recognition.face_encodings(
+                rgb,
+                locations
+            )
 
-                    folder_name = data["names"][idx]
+            for encoding, location in zip(encodings, locations):
 
-                    # SPLIT NAME_USN
-                    parts = folder_name.rsplit("_", 1)
+                distances = face_recognition.face_distance(
+                    data["encodings"],
+                    encoding
+                )
 
-                    if len(parts) != 2:
-                        continue
+                if len(distances) > 0:
 
-                    student_name = parts[0]
-                    usn = parts[1]
+                    idx = np.argmin(distances)
 
-                    # MARK PRESENT
-                    if usn not in present_students:
+                    if distances[idx] < 0.5:
 
-                        present_students[usn] = {
-                            "name": student_name,
-                            "time": datetime.now().strftime(
-                                "%H:%M:%S"
-                            ),
-                            "status": "Present"
-                        }
+                        folder_name = data["names"][idx]
 
-                    top, right, bottom, left = location
+                        # SPLIT NAME_USN
+                        parts = folder_name.rsplit("_", 1)
 
-                    top *= 4
-                    right *= 4
-                    bottom *= 4
-                    left *= 4
+                        if len(parts) != 2:
+                            continue
 
-                    # FACE BOX
-                    cv2.rectangle(
-                        frame,
-                        (left, top),
-                        (right, bottom),
-                        (0, 255, 0),
-                        2
-                    )
+                        student_name = parts[0]
+                        usn = parts[1]
 
-                    # LABEL
-                    cv2.putText(
-                        frame,
-                        f"{student_name} ({usn})",
-                        (left, top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 255, 0),
-                        2
-                    )
+                        # MARK PRESENT
+                        if usn not in present_students:
 
-        # LIVE COUNT
-        present_count = len(present_students)
+                            present_students[usn] = {
+                                "name": student_name,
+                                "time": datetime.now().strftime(
+                                    "%H:%M:%S"
+                                ),
+                                "status": "Present"
+                            }
 
-        counter_text = (
-            f"{present_count}/{total_students} Present"
-        )
+                        top, right, bottom, left = location
 
-        cv2.putText(
-            frame,
-            counter_text,
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 0, 255),
-            3
-        )
-        yield frame, counter_text
+                        top *= 4
+                        right *= 4
+                        bottom *= 4
+                        left *= 4
 
+                        # FACE BOX
+                        cv2.rectangle(
+                            frame,
+                            (left, top),
+                            (right, bottom),
+                            (0, 255, 0),
+                            2
+                        )
 
-    cap.release()
+                        # LABEL
+                        cv2.putText(
+                            frame,
+                            f"{student_name} ({usn})",
+                            (left, top - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 0),
+                            2
+                        )
 
+            # LIVE COUNT
+            present_count = len(present_students)
 
-    # SAVE FINAL CSV
-    with open(attendance_file, "w", newline="") as f:
+            counter_text = (
+                f"{present_count}/{total_students} Present"
+            )
 
-        writer = csv.writer(f)
+            cv2.putText(
+                frame,
+                counter_text,
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 0, 255),
+                3
+            )
+            yield frame, counter_text
 
-        writer.writerow([
-            "USN",
-            "Name",
-            "Time",
-            "Status"
-        ])
+    finally:
+        cap.release()
 
-        for usn, details in registry.items():
+        # SAVE FINAL CSV
+        print(f"[ATTENDANCE] Saving final CSV to: {attendance_file}")
+        with open(attendance_file, "w", newline="") as f:
 
-            if usn in present_students:
+            writer = csv.writer(f)
 
-                writer.writerow([
-                    usn,
-                    present_students[usn]["name"],
-                    present_students[usn]["time"],
-                    "Present"
-                ])
+            writer.writerow([
+                "USN",
+                "Name",
+                "Time",
+                "Status"
+            ])
 
-            else:
+            for usn, details in registry.items():
 
-                writer.writerow([
-                    usn,
-                    details["name"],
-                    "-",
-                    "Absent"
-                ])
+                if usn in present_students:
+
+                    writer.writerow([
+                        usn,
+                        present_students[usn]["name"],
+                        present_students[usn]["time"],
+                        "Present"
+                    ])
+
+                else:
+
+                    writer.writerow([
+                        usn,
+                        details["name"],
+                        "-",
+                        "Absent"
+                    ])
+        print("[ATTENDANCE] Final CSV saved successfully.")
 
     yield None, (
         f"✅ Attendance completed\n"
