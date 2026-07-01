@@ -6,11 +6,6 @@ By executing lightweight inference on the edge and proxying heavy GPU-bound work
 
 ---
 
-## 📺 Project Demo Video
-👉 **[Watch the System Demo on YouTube](https://youtu.be/sQapDEO9rCs?si=0QqsEi57405Jv_r0)**
-
----
-
 ## 🚀 Key Features
 
 * **Biometric Attendance Tracking (dlib ResNet):** Automatically logs student attendance using a 1080p camera feed, matching face templates against a local database within 1.5 seconds.
@@ -22,74 +17,6 @@ By executing lightweight inference on the edge and proxying heavy GPU-bound work
   3. **Admin Face Registration:** Enroll new students, capture training frames, and manage the biometric gallery.
   4. **Insights & Analytics:** Interactive visual charts mapping attendance health (Chart.js) and alerts for students below the 75% threshold.
 * **Edge-Offload Model:** Offloads resource-heavy GPU-bound AI processing to a local LAN computer, allowing the Radxa board to maintain stable performance without overheating.
-
----
-
-## 🛠️ System Architecture
-
-GitHub natively renders the system diagram below showing how the components interact:
-
-```mermaid
-graph TD
-    %% Frontend Layer
-    subgraph Web_UI [Web Interface - HTML5/CSS3/Vanilla JS]
-        SD[Student Dashboard]
-        TP[Teacher Portal]
-        AP[Admin Registration]
-        IA[Insights & Analytics]
-    end
-
-    %% Edge Layer
-    subgraph Radxa_Edge [Edge Computer - Radxa Cubie A7A]
-        direction TB
-        API[FastAPI Web Server]
-        SM[Session Manager]
-        
-        subgraph Threads [Background Threads]
-            CT[Camera Preview Thread]
-            AST[Attendance Scanner Thread]
-            ART[Audio Recorder Thread]
-        end
-
-        FRE[Face Recognition Engine - dlib]
-    end
-
-    %% Storage Layer
-    subgraph Local_Storage [Local Storage]
-        RJ[registry.json]
-        SJ[sessions.json]
-        AC[attendance.csv]
-        WAV[audio/*.wav]
-    end
-
-    %% AI Server Layer
-    subgraph Secondary_GPU [Secondary AI Server]
-        WS[Whisper Medium Model - STT]
-        LLM[Llama-3 8B - Summarization / Quiz / Slides]
-    end
-
-    %% Hardware Inputs
-    Cam[USB Camera Module] --> CT
-    Cam --> AST
-    Mic[USB Microphone Module] --> ART
-
-    %% Flows
-    Web_UI <-->|HTTP / REST| API
-    AST -->|Biometric Frame Match| FRE
-    FRE -->|Registered Encodings| RJ
-    FRE -->|Log Attendance| AC
-    ART -->|Save Stream| WAV
-    
-    %% AI Pipeline
-    API -->|HTTP Proxy WAV File| Secondary_GPU
-    WAV --> WS
-    WS -->|Transcript| LLM
-    LLM -->|Notes/Slides/Quiz| API
-    API -->|Cache Data| SJ
-    
-    %% Analytics
-    AC -->|Render Statistics| IA
-```
 
 ---
 
